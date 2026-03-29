@@ -40,33 +40,74 @@ show_current_version() {
 }
 
 # Install with detected package manager
+# Detect if running from the git repo (local source available)
+detect_local_source() {
+    # Check if script is in the repo dir, or pyproject.toml exists nearby
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+    if [ -f "$script_dir/pyproject.toml" ] && grep -q "claude-statusbar" "$script_dir/pyproject.toml" 2>/dev/null; then
+        echo "$script_dir"
+        return
+    fi
+    # Also check cwd
+    if [ -f "./pyproject.toml" ] && grep -q "claude-statusbar" "./pyproject.toml" 2>/dev/null; then
+        pwd
+        return
+    fi
+    echo ""
+}
+
 install_package() {
     local pm=$(detect_package_manager)
-    
+    local local_src=$(detect_local_source)
+
     echo -e "${BLUE}Installing/upgrading claude-statusbar...${NC}"
     show_current_version
-    
+
+    if [ -n "$local_src" ]; then
+        echo -e "${GREEN}Local source detected: $local_src${NC}"
+        echo "Installing from local source (editable mode)..."
+    fi
+
+    # Determine the install target: local path or PyPI package name
+    local pkg="claude-statusbar"
+    local local_flag=""
+    if [ -n "$local_src" ]; then
+        pkg="$local_src"
+        local_flag="--editable"
+    fi
+
     case $pm in
         uv)
             echo "Using uv (recommended)..."
-            uv tool install --upgrade --force-reinstall --refresh claude-statusbar
+            if [ -n "$local_src" ]; then
+                uv tool install --force-reinstall $local_flag "$pkg"
+            else
+                uv tool install --upgrade --force-reinstall --refresh "$pkg"
+            fi
             # Also install claude-monitor for full functionality
-            uv tool install --upgrade --force claude-monitor
+            uv tool install --upgrade --force claude-monitor 2>/dev/null || true
             ;;
         pipx)
             echo "Using pipx..."
-            pipx install --force claude-statusbar
-            pipx install --force claude-monitor
+            if [ -n "$local_src" ]; then
+                pipx install --force $local_flag "$pkg"
+            else
+                pipx install --force "$pkg"
+            fi
+            pipx install --force claude-monitor 2>/dev/null || true
             pipx upgrade claude-monitor 2>/dev/null || true
             ;;
         pip)
             echo "Using pip..."
-            if command -v pip3 &> /dev/null; then
-                pip3 install --user --upgrade --force-reinstall claude-statusbar claude-monitor
+            local pip_cmd="pip3"
+            command -v pip3 &>/dev/null || pip_cmd="pip"
+            if [ -n "$local_src" ]; then
+                $pip_cmd install --user $local_flag "$pkg"
             else
-                pip install --user --upgrade --force-reinstall claude-statusbar claude-monitor
+                $pip_cmd install --user --upgrade --force-reinstall "$pkg" claude-monitor
             fi
-            
+
             # Check PATH
             if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
                 echo -e "${YELLOW}Adding ~/.local/bin to PATH...${NC}"
@@ -77,21 +118,25 @@ install_package() {
             ;;
         none)
             echo -e "${YELLOW}No package manager found. Installing uv first...${NC}"
-            
+
             # Install uv
             if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$OSTYPE" == "win32" ]]; then
                 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
             else
                 curl -LsSf https://astral.sh/uv/install.sh | sh
             fi
-            
+
             # Add to PATH for current session
             export PATH="$HOME/.local/bin:$PATH"
             export PATH="$HOME/.cargo/bin:$PATH"
-            
+
             # Install packages with uv
-            uv tool install --upgrade --force-reinstall --refresh claude-statusbar
-            uv tool install --upgrade --force claude-monitor
+            if [ -n "$local_src" ]; then
+                uv tool install --force-reinstall $local_flag "$pkg"
+            else
+                uv tool install --upgrade --force-reinstall --refresh "$pkg"
+            fi
+            uv tool install --upgrade --force claude-monitor 2>/dev/null || true
             ;;
     esac
 }
