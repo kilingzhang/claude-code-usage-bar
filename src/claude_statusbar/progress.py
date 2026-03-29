@@ -77,6 +77,10 @@ def format_status_line(
     ctx_pct: Optional[float] = None,
     bypass: bool = False,
     use_color: bool = True,
+    session_cost: Optional[float] = None,
+    lines_added: int = 0,
+    lines_removed: int = 0,
+    current_time: str = "",
 ) -> str:
     """Build the complete status bar string.
 
@@ -102,8 +106,21 @@ def format_status_line(
     if plan:
         parts.append(colorize(plan, overall_color, use_color))
     parts.append(colorize(model, overall_color, use_color))
+
+    # Session cost + code changes
+    extras = []
+    if session_cost is not None and session_cost > 0:
+        extras.append(f"${session_cost:.2f}")
+    if lines_added > 0 or lines_removed > 0:
+        extras.append(f"+{lines_added}/-{lines_removed}")
+    if extras:
+        parts.append(colorize(" ".join(extras), overall_color, use_color))
+
     if bypass:
         parts.append(colorize("⚠️BYPASS", RED, use_color))
+
+    if current_time:
+        parts.append(colorize(current_time, overall_color, use_color))
 
     separator = colorize(" | ", overall_color, use_color)
     return separator.join(parts)
