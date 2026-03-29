@@ -81,6 +81,7 @@ def format_status_line(
     lines_added: int = 0,
     lines_removed: int = 0,
     current_time: str = "",
+    forecast: str = "",
 ) -> str:
     """Build the complete status bar string.
 
@@ -105,6 +106,10 @@ def format_status_line(
     parts.append(colorize(f"⏰{reset_time}", overall_color, use_color))
     if plan:
         parts.append(colorize(plan, overall_color, use_color))
+
+    if forecast:
+        parts.append(colorize(forecast, overall_color, use_color))
+
     parts.append(colorize(model, overall_color, use_color))
 
     # Session cost + code changes

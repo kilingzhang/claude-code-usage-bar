@@ -13,18 +13,22 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .paths import STATUSBAR_CACHE_DIR
+from .paths import get_statusbar_cache_dir
 
 CACHE_MAX_AGE_S = 30
-CACHE_DIR = STATUSBAR_CACHE_DIR
-CACHE_FILE = CACHE_DIR / "cache.json"
 
 
-def read_cache(path: Path = CACHE_FILE) -> Optional[Dict[str, Any]]:
+def get_cache_file() -> Path:
+    """Return the cache file for the current Claude home."""
+    return get_statusbar_cache_dir() / "cache.json"
+
+
+def read_cache(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """Read cache if fresh (<CACHE_MAX_AGE_S seconds old).
 
     Returns None if missing, corrupt, or stale.
     """
+    path = path or get_cache_file()
     try:
         if not path.exists():
             return None
@@ -37,8 +41,9 @@ def read_cache(path: Path = CACHE_FILE) -> Optional[Dict[str, Any]]:
         return None
 
 
-def read_cache_stale(path: Path = CACHE_FILE) -> Optional[Dict[str, Any]]:
+def read_cache_stale(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """Read cache regardless of age. Returns None only if missing/corrupt."""
+    path = path or get_cache_file()
     try:
         if not path.exists():
             return None
@@ -47,11 +52,12 @@ def read_cache_stale(path: Path = CACHE_FILE) -> Optional[Dict[str, Any]]:
         return None
 
 
-def write_cache(data: Dict[str, Any], path: Path = CACHE_FILE) -> None:
+def write_cache(data: Dict[str, Any], path: Optional[Path] = None) -> None:
     """Atomically write data to cache file.
 
     Writes to a temp file first, then renames to prevent partial reads.
     """
+    path = path or get_cache_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {**data, "_cache_time": time.time()}
     fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")

@@ -8,6 +8,7 @@ Automatically detects Claude Code config directories by inspecting:
 Supports multiple Claude home directories on the same device.
 """
 
+import hashlib
 import logging
 import os
 import platform
@@ -23,7 +24,8 @@ _CLAUDE_DIR_PREFIX = ".claude"  # matches .claude, .claude-max, .claude-pro, etc
 _CLAUDE_XDG_NAME = "claude"
 
 # Cache layer ── own data lives here, independent of Claude home
-STATUSBAR_CACHE_DIR = Path.home() / ".cache" / "claude-statusbar"
+STATUSBAR_CACHE_ROOT = Path.home() / ".cache" / "claude-statusbar"
+STATUSBAR_CACHE_DIR = STATUSBAR_CACHE_ROOT
 
 
 def _unique(paths: List[Path]) -> List[Path]:
@@ -36,6 +38,24 @@ def _unique(paths: List[Path]) -> List[Path]:
             seen.add(rp)
             out.append(p)
     return out
+
+
+def _cache_key_for_claude_home(claude_home: Path) -> str:
+    """Build a stable cache key for a Claude home path."""
+    expanded = claude_home.expanduser().resolve()
+    if expanded.name == _CLAUDE_DIR_NAME:
+        return "default"
+
+    suffix = expanded.name.lstrip(".")
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in suffix)
+    digest = hashlib.sha1(str(expanded).encode("utf-8")).hexdigest()[:8]
+    return f"{safe}-{digest}"
+
+
+def get_statusbar_cache_dir() -> Path:
+    """Return the cache directory for the current Claude home."""
+    claude_home = get_claude_home()
+    return STATUSBAR_CACHE_ROOT / _cache_key_for_claude_home(claude_home)
 
 
 # ── Single "current" Claude home ────────────────────────────────
@@ -135,7 +155,8 @@ def get_all_residual_paths() -> List[Path]:
     paths: list[Path] = []
 
     # Cache directory
-    paths.append(STATUSBAR_CACHE_DIR)
+    paths.append(STATUSBAR_CACHE_ROOT)
+    paths.extend([get_statusbar_cache_dir()])
 
     # Legacy last-check file (stored in home root)
     paths.append(Path.home() / ".claude-statusbar-last-check")
@@ -196,10 +217,16 @@ def build_data_candidate_paths() -> List[Path]:
 
 
 def _detect_from_parent_process() -> Optional[Path]:
-    """Try to find the Claude home dir from the parent process.
+    """Try to find the Claude home dir from the parent process tree.
 
-    On macOS: uses ``lsof -p <ppid>`` to find open files under .claude/
-    On Linux: reads ``/proc/<ppid>/fd/`` symlinks
+    Detection order within ancestors:
+      1. CLAUDE_CONFIG_DIR in ancestor environment
+      2. Open files under .claude* directories
+
+    On macOS: uses ``lsof -p <pid>`` to find open files under .claude/
+    On Linux: reads ``/proc/<pid>/fd/`` symlinks.
+    Walks several ancestor processes because statusLine commands are often
+    launched by an intermediate shell instead of the actual Claude process.
     """
     try:
         ppid = os.getppid()
@@ -207,13 +234,109 @@ def _detect_from_parent_process() -> Optional[Path]:
             return None
 
         system = platform.system()
+        candidates: list[Path] = []
 
-        if system == "Linux":
-            return _detect_linux(ppid)
-        elif system == "Darwin":
-            return _detect_macos(ppid)
+        for pid in _iter_ancestor_pids(ppid):
+            env_match = _detect_from_process_env(pid)
+            if env_match:
+                candidates.append(env_match)
+
+            if system == "Linux":
+                found = _detect_linux(pid)
+            elif system == "Darwin":
+                found = _detect_macos(pid)
+            else:
+                found = None
+            if found:
+                candidates.append(found)
+
+        return _prefer_claude_home(candidates)
     except Exception:
         pass
+    return None
+
+
+def _iter_ancestor_pids(start_pid: int, max_depth: int = 6) -> List[int]:
+    """Return ancestor pids from nearest parent upward."""
+    pids: list[int] = []
+    pid = start_pid
+    seen: set[int] = set()
+
+    while pid > 1 and pid not in seen and len(pids) < max_depth:
+        pids.append(pid)
+        seen.add(pid)
+        pid = _get_parent_pid(pid)
+
+    return pids
+
+
+def _get_parent_pid(pid: int) -> int:
+    """Return parent pid for a process, or 0 on failure."""
+    system = platform.system()
+
+    try:
+        if system == "Linux":
+            stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+            if len(stat_fields) >= 4:
+                return int(stat_fields[3])
+            return 0
+
+        result = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode != 0:
+            return 0
+        return int(result.stdout.strip() or "0")
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 0
+
+
+def _detect_from_process_env(pid: int) -> Optional[Path]:
+    """Read CLAUDE_CONFIG_DIR from a process environment when available."""
+    env_dir = _read_process_env_var(pid, "CLAUDE_CONFIG_DIR")
+    if not env_dir:
+        return None
+
+    p = Path(env_dir).expanduser()
+    if _is_claude_dir(p.name):
+        return p
+    return p / _CLAUDE_DIR_NAME
+
+
+def _read_process_env_var(pid: int, key: str) -> Optional[str]:
+    """Best-effort process env lookup on Linux/macOS."""
+    system = platform.system()
+
+    try:
+        if system == "Linux":
+            raw = Path(f"/proc/{pid}/environ").read_bytes()
+            for entry in raw.split(b"\0"):
+                if entry.startswith(f"{key}=".encode("utf-8")):
+                    return entry.split(b"=", 1)[1].decode("utf-8")
+            return None
+
+        result = subprocess.run(
+            ["ps", "eww", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode != 0:
+            return None
+
+        for line in result.stdout.splitlines()[1:]:
+            marker = f"{key}="
+            idx = line.find(marker)
+            if idx == -1:
+                continue
+            value = line[idx + len(marker):].split(" ", 1)[0]
+            return value
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
+        return None
+
     return None
 
 
@@ -232,14 +355,16 @@ def _detect_linux(ppid: int) -> Optional[Path]:
         return None
 
     try:
+        matches: list[Path] = []
         for fd in proc_fd.iterdir():
             try:
                 target = fd.resolve()
                 found = _find_claude_dir_in_parts(target.parts)
                 if found:
-                    return found
+                    matches.append(found)
             except (OSError, ValueError):
                 continue
+        return _prefer_claude_home(matches)
     except PermissionError:
         pass
     return None
@@ -255,6 +380,7 @@ def _detect_macos(ppid: int) -> Optional[Path]:
         if result.returncode != 0:
             return None
 
+        matches: list[Path] = []
         for line in result.stdout.splitlines():
             # lsof -Fn outputs lines like "n/path/to/file"
             if not line.startswith("n/"):
@@ -262,7 +388,8 @@ def _detect_macos(ppid: int) -> Optional[Path]:
             path_str = line[1:]  # strip leading 'n'
             found = _find_claude_dir_in_parts(Path(path_str).parts)
             if found:
-                return found
+                matches.append(found)
+        return _prefer_claude_home(matches)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
     return None
@@ -328,3 +455,19 @@ def _scan_peer_homes() -> List[Path]:
         pass
 
     return results
+
+
+def _prefer_claude_home(paths: List[Path]) -> Optional[Path]:
+    """Pick the most specific Claude home from multiple matches."""
+    if not paths:
+        return None
+
+    unique = _unique(paths)
+    return sorted(
+        unique,
+        key=lambda p: (
+            0 if p.name != _CLAUDE_DIR_NAME else 1,
+            -len(p.name),
+            str(p),
+        ),
+    )[0]

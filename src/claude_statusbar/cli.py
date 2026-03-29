@@ -68,6 +68,11 @@ Integration:
         help="Show detailed breakdown of usage data and limits",
     )
     parser.add_argument(
+        "--forecast-window-minutes",
+        type=int,
+        help="Use the last N minutes for forecast baseline; omit to use all available history",
+    )
+    parser.add_argument(
         "--no-auto-update",
         action="store_true",
         help="Disable automatic update checks (or set CLAUDE_STATUSBAR_NO_UPDATE=1)",
@@ -110,6 +115,22 @@ Integration:
         print("Reset hour must be between 0 and 23.", file=sys.stderr)
         return 1
 
+    forecast_window_minutes = args.forecast_window_minutes
+    if forecast_window_minutes is None:
+        env_forecast = os.environ.get("CLAUDE_STATUSBAR_FORECAST_MINUTES")
+        if env_forecast:
+            try:
+                forecast_window_minutes = int(env_forecast)
+            except ValueError:
+                print(
+                    "Ignoring invalid CLAUDE_STATUSBAR_FORECAST_MINUTES (must be positive integer).",
+                    file=sys.stderr,
+                )
+                forecast_window_minutes = None
+    if forecast_window_minutes is not None and forecast_window_minutes <= 0:
+        print("Forecast window must be greater than 0 minutes.", file=sys.stderr)
+        return 1
+
     if args.uninstall:
         return _run_uninstall()
 
@@ -128,7 +149,8 @@ Integration:
     use_color = not (args.no_color or env_bool("NO_COLOR"))
     try:
         statusbar_main(json_output=json_output, plan=plan, reset_hour=reset_hour,
-                        use_color=use_color, detail=args.detail)
+                        use_color=use_color, detail=args.detail,
+                        forecast_window_minutes=forecast_window_minutes)
         return 0
     except KeyboardInterrupt:
         return 130

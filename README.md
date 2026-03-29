@@ -7,7 +7,7 @@ Lightweight Claude Code status bar monitor — see your rate limits, context win
 ## What it shows
 
 ```
-[███████░░░] 5h 68% | [█░░░░░░░░░] 7d 5% | ⏰0h21m | max5 🔥x2[03:00~21:00] | Opus 4.6(13.4k/1.0M)
+[███████░░░] 5h 68% | [█░░░░░░░░░] 7d 5% | ⏰0h21m | max5 🔥x2[03:00~21:00] | Opus 4.6(13.4k/1.0M) | ⌛5h:1h20m(82|n34) 7d:>reset(67|n118)
 ```
 
 | Segment | Meaning |
@@ -18,6 +18,7 @@ Lightweight Claude Code status bar monitor — see your rate limits, context win
 | `max5` | Your plan tier |
 | `🔥x2[03:00~21:00]` | 2x promo active, showing local time window |
 | `Opus 4.6(13.4k/1.0M)` | Model + context window usage (used/total) |
+| `⌛5h:1h20m(82|n34) 7d:>reset(67|n118)` | Forecast for both windows. `82`/`67` are confidence scores, `n34`/`n118` are sample counts |
 
 Colors: green (<30%) | yellow (30-70%) | red (>70%)
 
@@ -56,6 +57,7 @@ Then add to `~/.claude/settings.json`:
 cs                  # show status bar (shortest alias)
 cs --json-output    # machine-readable JSON
 cs --plan max5      # set your plan (pro / max5 / max20)
+cs --forecast-window-minutes 90  # override default all-history forecast with the last 90 minutes
 cs --no-color       # disable ANSI colors
 cs --no-auto-update # disable auto-update checks
 ```
@@ -76,7 +78,10 @@ cs --plan max20   # Max $200/mo
 |----------|--------|
 | `CLAUDE_STATUSBAR_NO_UPDATE=1` | Disable automatic update checks |
 | `CLAUDE_PLAN=max5` | Set plan tier |
+| `CLAUDE_STATUSBAR_FORECAST_MINUTES=90` | Override the default all-history forecast with the last N minutes |
 | `NO_COLOR=1` | Disable ANSI colors |
+
+By default, forecast uses weighted history: recent usage counts more, older usage fades out. `5h` prediction uses weighted active-session speed, while `7d` prediction uses weighted elapsed real time to better match weekly exhaustion risk.
 
 ## 2x Promo Time Window
 

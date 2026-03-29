@@ -99,6 +99,16 @@ def test_format_status_line_bypass():
     )
     assert "BYPASS" in line
 
+def test_format_status_line_with_forecast():
+    line = format_status_line(
+        msgs_pct=76, tkns_pct=None,
+        reset_time="2h30m", model="Sonnet",
+        weekly_pct=20,
+        forecast="⌛ETA 1h20m",
+        use_color=False,
+    )
+    assert "⌛ETA 1h20m" in line
+
 def test_format_status_line_7d_countdown():
     """7d countdown should appear next to the 7d progress bar."""
     line = format_status_line(
