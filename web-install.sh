@@ -125,74 +125,106 @@ configure_shell() {
     fi
 }
 
-# Configure Claude Code status bar
+# Discover all Claude home directories (.claude, .claude-max, .claude-pro, etc.)
+discover_claude_homes() {
+    local homes=()
+
+    # CLAUDE_CONFIG_DIR env override
+    if [ -n "$CLAUDE_CONFIG_DIR" ]; then
+        local base
+        base="$(basename "$CLAUDE_CONFIG_DIR")"
+        case "$base" in
+            .claude|.claude[-_]*) [ -d "$CLAUDE_CONFIG_DIR" ] && homes+=("$CLAUDE_CONFIG_DIR") ;;
+            *) [ -d "$CLAUDE_CONFIG_DIR/.claude" ] && homes+=("$CLAUDE_CONFIG_DIR/.claude") ;;
+        esac
+    fi
+
+    # ~/.claude and ~/.claude-* prefixed dirs
+    for candidate in "$HOME"/.claude "$HOME"/.claude[-_]*; do
+        [ -d "$candidate" ] && homes+=("$candidate")
+    done
+
+    # Deduplicate
+    printf '%s\n' "${homes[@]}" | sort -u
+}
+
+# Apply statusLine config to a single settings.json
+apply_statusline() {
+    local settings_file="$1"
+    local cmd="$2"
+
+    if [ -f "$settings_file" ] && [ -s "$settings_file" ]; then
+        # Update existing settings using Python (safe JSON manipulation)
+        python3 -c "
+import json, sys, os
+settings_path = sys.argv[1]
+statusbar_cmd = sys.argv[2]
+try:
+    with open(settings_path, 'r') as f:
+        settings = json.load(f)
+except Exception:
+    settings = {}
+settings['statusLine'] = {'type': 'command', 'command': statusbar_cmd, 'padding': 0}
+with open(settings_path, 'w') as f:
+    json.dump(settings, f, indent=2, ensure_ascii=False)
+" "$settings_file" "$cmd" 2>/dev/null
+    else
+        # Create new settings file
+        mkdir -p "$(dirname "$settings_file")"
+        python3 -c "
+import json, sys
+settings_path = sys.argv[1]
+statusbar_cmd = sys.argv[2]
+settings = {'statusLine': {'type': 'command', 'command': statusbar_cmd, 'padding': 0}}
+with open(settings_path, 'w') as f:
+    json.dump(settings, f, indent=2, ensure_ascii=False)
+" "$settings_file" "$cmd" 2>/dev/null
+    fi
+}
+
+# Configure Claude Code status bar (all discovered homes)
 configure_claude_statusbar() {
     echo -e "\n${BLUE}Configuring Claude Code status bar...${NC}"
-    
-    # Claude settings file path
-    CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-    
+
     # Get the installed claude-statusbar command path
     STATUSBAR_CMD=$(which claude-statusbar 2>/dev/null)
-    
+
     if [ -z "$STATUSBAR_CMD" ]; then
         echo -e "${YELLOW}⚠️  claude-statusbar command not found in PATH${NC}"
         return
     fi
-    
-    # Create .claude directory if it doesn't exist
-    mkdir -p "$HOME/.claude"
-    
-    # Backup existing settings if they exist
-    if [ -f "$CLAUDE_SETTINGS" ]; then
-        cp "$CLAUDE_SETTINGS" "$CLAUDE_SETTINGS.backup.$(date +%Y%m%d_%H%M%S)"
-        echo -e "${GREEN}✅ Backed up existing settings${NC}"
+
+    local configured=0
+    local claude_homes=()
+    while IFS= read -r line; do
+        claude_homes+=("$line")
+    done < <(discover_claude_homes)
+
+    # If no homes found at all, create ~/.claude as default
+    if [ ${#claude_homes[@]} -eq 0 ]; then
+        claude_homes=("$HOME/.claude")
     fi
-    
-    # Check if settings file exists and has content
-    if [ -f "$CLAUDE_SETTINGS" ] && [ -s "$CLAUDE_SETTINGS" ]; then
-        # Update existing settings using Python
-        python3 -c "
-import json
-import sys
 
-try:
-    with open('$CLAUDE_SETTINGS', 'r') as f:
-        settings = json.load(f)
-except:
-    settings = {}
+    for claude_home in "${claude_homes[@]}"; do
+        local settings_file="$claude_home/settings.json"
 
-# Add statusLine configuration - now with integrated model display
-settings['statusLine'] = {
-    'type': 'command',
-    'command': '$STATUSBAR_CMD',
-    'padding': 0
-}
+        # Backup existing settings
+        if [ -f "$settings_file" ]; then
+            cp "$settings_file" "$settings_file.backup.$(date +%Y%m%d_%H%M%S)"
+        fi
 
-with open('$CLAUDE_SETTINGS', 'w') as f:
-    json.dump(settings, f, indent=2)
+        if apply_statusline "$settings_file" "$STATUSBAR_CMD"; then
+            echo -e "${GREEN}✅ Configured: $settings_file${NC}"
+            configured=$((configured + 1))
+        else
+            echo -e "${YELLOW}⚠️  Failed: $settings_file${NC}"
+        fi
+    done
 
-print('✅ Updated Claude Code settings with integrated display')
-" || {
-            echo -e "${YELLOW}⚠️  Failed to update settings with Python${NC}"
-            return
-        }
-    else
-        # Create new settings file
-        cat > "$CLAUDE_SETTINGS" << EOF
-{
-  "statusLine": {
-    "type": "command",
-    "command": "$STATUSBAR_CMD",
-    "padding": 0
-  }
-}
-EOF
-        echo -e "${GREEN}✅ Created Claude Code settings${NC}"
+    if [ $configured -gt 0 ]; then
+        echo -e "${GREEN}✅ Claude Code status bar configured ($configured instance(s))!${NC}"
+        echo -e "${YELLOW}📝 Restart Claude Code to see the updated status bar${NC}"
     fi
-    
-    echo -e "${GREEN}✅ Claude Code status bar configured!${NC}"
-    echo -e "${YELLOW}📝 Restart Claude Code to see the updated status bar${NC}"
 }
 
 # Test installation

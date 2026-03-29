@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from .cache import read_cache, read_cache_stale, write_cache, refresh_cache_background
+from .paths import (
+    get_claude_home,
+    get_claude_settings_path,
+    build_data_candidate_paths,
+    STATUSBAR_CACHE_DIR,
+)
 from .progress import format_status_line
 
 # Suppress log output
@@ -224,45 +230,8 @@ except Exception as e:
 def direct_data_analysis() -> Optional[Dict[str, Any]]:
     """Directly analyze Claude data files, completely independent implementation"""
     try:
-        def build_candidate_paths() -> List[Path]:
-            """Collect plausible data directories in priority order."""
-            paths: List[Path] = []
-            
-            # Respect Claude Code env override
-            env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
-            if env_dir:
-                env_path = Path(env_dir).expanduser()
-                if env_path.name == ".claude":
-                    paths.append(env_path)
-                    paths.append(env_path / "projects")
-                else:
-                    paths.append(env_path / ".claude")
-                    paths.append(env_path / ".claude" / "projects")
-            
-            # Running from inside .claude
-            cwd = Path.cwd()
-            if cwd.name == ".claude":
-                paths.append(cwd)
-                paths.append(cwd / "projects")
-            
-            # Standard locations
-            paths.extend([
-                Path.home() / '.claude' / 'projects',
-                Path.home() / '.config' / 'claude' / 'projects',
-                Path.home() / '.claude',
-            ])
-            
-            # Deduplicate while preserving order
-            seen = set()
-            unique_paths: List[Path] = []
-            for p in paths:
-                if p not in seen:
-                    unique_paths.append(p)
-                    seen.add(p)
-            return unique_paths
-
         data_path = None
-        for path in build_candidate_paths():
+        for path in build_data_candidate_paths():
             if path.exists() and path.is_dir():
                 data_path = path
                 break
@@ -431,7 +400,7 @@ def parse_stdin_data() -> Dict[str, Any]:
         if not raw:
             return result
 
-        debug_file = Path.home() / ".cache" / "claude-statusbar" / "last_stdin.json"
+        debug_file = STATUSBAR_CACHE_DIR / "last_stdin.json"
         data = json.loads(raw)
 
         # Only cache stdin when it contains rate_limits (avoid overwriting with empty data)
@@ -519,7 +488,7 @@ def is_bypass_permissions_active() -> bool:
 
     # 2. settings.json defaultMode
     try:
-        settings_path = Path.home() / '.claude' / 'settings.json'
+        settings_path = get_claude_settings_path()
         if settings_path.exists():
             with open(settings_path, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
@@ -768,7 +737,7 @@ def get_promo_label() -> str:
     else:
         return f"🔥x2[{peak_end_local}~{peak_start_local}]"
 
-CONFIG_DIR = Path.home() / ".cache" / "claude-statusbar"
+CONFIG_DIR = STATUSBAR_CACHE_DIR
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 
@@ -947,7 +916,7 @@ def check_for_updates():
         from datetime import datetime
 
         # Check if we should run update check
-        last_check_file = Path.home() / '.claude-statusbar-last-check'
+        last_check_file = STATUSBAR_CACHE_DIR / "last-update-check"
         now = datetime.now()
 
         should_check = True
@@ -1017,6 +986,12 @@ def main(json_output: bool = False, plan: Optional[str] = None,
     """Main function"""
     stdin_data = parse_stdin_data()
 
+    # Extract session extras from stdin
+    _cost = stdin_data.get('session_cost_usd')
+    _lines_add = stdin_data.get('lines_added', 0)
+    _lines_rm = stdin_data.get('lines_removed', 0)
+    _now = datetime.now().astimezone().strftime("%H:%M")
+
     try:
         if not json_output:
             check_for_updates()
@@ -1080,13 +1055,14 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                              "promo_label": promo_label},
                 }))
             else:
-                # Append context window usage to model name: Opus 4.6(10k/1M)
+                # Append context window usage to model name: Opus 4.6(4.8k/1.0M 0.5%)
                 ctx_used = stdin_data.get('total_input_tokens', 0) + stdin_data.get('total_output_tokens', 0)
                 ctx_size = stdin_data.get('context_window_size', 0)
                 if ctx_size > 0:
+                    ctx_pct = ctx_used / ctx_size * 100
                     # Strip redundant size suffix like "(1M context)" from display_name
                     model = re.sub(r'\s*\([^)]*context[^)]*\)', '', model)
-                    model = f"{model}({format_number(ctx_used)}/{format_number(ctx_size)})"
+                    model = f"{model}({format_number(ctx_used)}/{format_number(ctx_size)} {ctx_pct:.0f}%)"
 
                 print(format_status_line(
                     msgs_pct=msgs_pct, tkns_pct=None,
@@ -1095,6 +1071,9 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                     weekly_pct=weekly_pct,
                     reset_time_7d=reset_time_7d,
                     bypass=bypass, use_color=use_color,
+                    session_cost=_cost,
+                    lines_added=_lines_add, lines_removed=_lines_rm,
+                    current_time=_now,
                 ))
         else:
             # No rate_limits yet — could be session start or old Claude Code
@@ -1106,8 +1085,9 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                 ctx_used = stdin_data.get('total_input_tokens', 0) + stdin_data.get('total_output_tokens', 0)
                 ctx_size = stdin_data.get('context_window_size', 0)
                 if ctx_size > 0:
+                    ctx_pct = ctx_used / ctx_size * 100
                     model = re.sub(r'\s*\([^)]*context[^)]*\)', '', model)
-                    model = f"{model}({format_number(ctx_used)}/{format_number(ctx_size)})"
+                    model = f"{model}({format_number(ctx_used)}/{format_number(ctx_size)} {ctx_pct:.0f}%)"
 
                 promo_label = get_promo_label()
                 cfg = load_config()
@@ -1131,6 +1111,9 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                         reset_time="--", model=model,
                         plan=plan_label, weekly_pct=None,
                         bypass=bypass, use_color=use_color,
+                        session_cost=_cost,
+                        lines_added=_lines_add, lines_removed=_lines_rm,
+                        current_time=_now,
                     ))
             else:
                 # No stdin at all — not running inside Claude Code statusLine
@@ -1156,6 +1139,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                 reset_time=reset_time, model=display_name,
                 weekly_pct=None,
                 bypass=bypass, use_color=use_color,
+                current_time=_now,
             ))
 
 if __name__ == '__main__':

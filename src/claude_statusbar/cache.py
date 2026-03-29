@@ -13,8 +13,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .paths import STATUSBAR_CACHE_DIR
+
 CACHE_MAX_AGE_S = 30
-CACHE_DIR = Path.home() / ".cache" / "claude-statusbar"
+CACHE_DIR = STATUSBAR_CACHE_DIR
 CACHE_FILE = CACHE_DIR / "cache.json"
 
 

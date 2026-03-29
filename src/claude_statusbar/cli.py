@@ -4,6 +4,9 @@
 import sys
 import os
 import argparse
+import json
+import shutil
+from pathlib import Path
 from . import __version__
 from .core import main as statusbar_main
 
@@ -69,6 +72,11 @@ Integration:
         action="store_true",
         help="Disable automatic update checks (or set CLAUDE_STATUSBAR_NO_UPDATE=1)",
     )
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove all claude-statusbar residual files (cache, config, aliases)",
+    )
 
     args = parser.parse_args()
 
@@ -102,6 +110,9 @@ Integration:
         print("Reset hour must be between 0 and 23.", file=sys.stderr)
         return 1
 
+    if args.uninstall:
+        return _run_uninstall()
+
     if args.install_deps:
         print("Installing claude-monitor for full functionality...")
         print("Run one of these commands:")
@@ -124,6 +135,76 @@ Integration:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+
+
+def _run_uninstall() -> int:
+    """Remove all claude-statusbar residual files and configurations."""
+    from .paths import (
+        STATUSBAR_CACHE_DIR,
+        discover_all_claude_homes,
+        get_all_residual_paths,
+    )
+
+    print("claude-statusbar uninstall")
+    print("=" * 40)
+
+    removed = []
+
+    # 1. Residual files (cache dir, legacy check file)
+    print("\n[1] Residual files")
+    for p in get_all_residual_paths():
+        try:
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
+            print(f"  removed: {p}")
+            removed.append(str(p))
+        except OSError as e:
+            print(f"  failed:  {p} ({e})", file=sys.stderr)
+
+    if not get_all_residual_paths():
+        print("  (none found)")
+
+    # 2. statusLine in Claude settings.json
+    print("\n[2] Claude settings.json statusLine config")
+    claude_homes = discover_all_claude_homes()
+    if not claude_homes:
+        print("  (no Claude home directories found)")
+    for claude_home in claude_homes:
+        settings_path = claude_home / "settings.json"
+        if not settings_path.is_file():
+            continue
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            sl = data.get("statusLine", {})
+            cmd = sl.get("command", "") if isinstance(sl, dict) else ""
+            if "claude-statusbar" in cmd or "cstatus" in cmd or "statusbar" in cmd:
+                del data["statusLine"]
+                settings_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+                print(f"  removed statusLine from: {settings_path}")
+                removed.append(str(settings_path))
+            else:
+                print(f"  no statusbar config in: {settings_path}")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  failed:  {settings_path} ({e})", file=sys.stderr)
+
+    # 3. Summary
+    print("\n" + "=" * 40)
+    if removed:
+        print(f"Cleaned {len(removed)} item(s).")
+    else:
+        print("Nothing to clean — already tidy.")
+
+    print("\nTo fully uninstall the package itself, run:")
+    print("  uv tool uninstall claude-statusbar")
+    print("  # or: pipx uninstall claude-statusbar")
+    print("  # or: pip uninstall claude-statusbar")
+
+    return 0
 
 
 if __name__ == "__main__":
