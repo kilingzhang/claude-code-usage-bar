@@ -452,6 +452,9 @@ def parse_stdin_data() -> Dict[str, Any]:
             result['context_window_size'] = cw.get('context_window_size', 0)
             result['total_input_tokens'] = cw.get('total_input_tokens', 0)
             result['total_output_tokens'] = cw.get('total_output_tokens', 0)
+            cu = cw.get('current_usage', {})
+            result['cache_creation_tokens'] = cu.get('cache_creation_input_tokens', 0)
+            result['cache_read_tokens'] = cu.get('cache_read_input_tokens', 0)
 
         # Session cost
         cost = data.get('cost', {})
@@ -1128,6 +1131,8 @@ def main(json_output: bool = False, plan: Optional[str] = None,
     _cost = stdin_data.get('session_cost_usd')
     _lines_add = stdin_data.get('lines_added', 0)
     _lines_rm = stdin_data.get('lines_removed', 0)
+    _cache_creation = stdin_data.get('cache_creation_tokens', 0)
+    _cache_read = stdin_data.get('cache_read_tokens', 0)
     _now = datetime.now().astimezone().strftime("%H:%M")
 
     try:
@@ -1212,6 +1217,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                     bypass=bypass, use_color=use_color,
                     session_cost=_cost,
                     lines_added=_lines_add, lines_removed=_lines_rm,
+                    cache_creation=_cache_creation, cache_read=_cache_read,
                     current_time=_now,
 
                     project_name=project_name, git_branch=git_branch,
@@ -1254,6 +1260,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                         bypass=bypass, use_color=use_color,
                         session_cost=_cost,
                         lines_added=_lines_add, lines_removed=_lines_rm,
+                        cache_creation=_cache_creation, cache_read=_cache_read,
                         current_time=_now,
 
                         project_name=project_name, git_branch=git_branch,

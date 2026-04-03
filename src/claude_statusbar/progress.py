@@ -80,6 +80,8 @@ def format_status_line(
     session_cost: Optional[float] = None,
     lines_added: int = 0,
     lines_removed: int = 0,
+    cache_creation: int = 0,
+    cache_read: int = 0,
     current_time: str = "",
     project_name: str = "",
     git_branch: str = "",
@@ -126,6 +128,16 @@ def format_status_line(
         extras.append(f"${session_cost:.2f}")
     if lines_added > 0 or lines_removed > 0:
         extras.append(f"+{lines_added}/-{lines_removed}")
+    if cache_creation > 0 or cache_read > 0:
+        def _compact(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n/1_000_000:.1f}M".replace(".0M", "M")
+            if n >= 10_000:
+                return f"{n/1000:.0f}k"
+            if n >= 1000:
+                return f"{n/1000:.1f}k".replace(".0k", "k")
+            return str(n)
+        extras.append(f"↑{_compact(cache_creation)} ↓{_compact(cache_read)}")
     if extras:
         parts.append(colorize(" ".join(extras), overall_color, use_color))
 
