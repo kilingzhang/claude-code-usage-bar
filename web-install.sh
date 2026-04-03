@@ -69,32 +69,25 @@ install_package() {
         echo "Installing from local source (editable mode)..."
     fi
 
-    # Determine the install target: local path or PyPI package name
-    local pkg="claude-statusbar"
-    local local_flag=""
+    # Determine the install target: local path > GitHub > PyPI
+    local pkg local_flag=""
     if [ -n "$local_src" ]; then
         pkg="$local_src"
         local_flag="--editable"
+    else
+        pkg="git+https://github.com/kilingzhang/claude-code-usage-bar.git"
     fi
 
     case $pm in
         uv)
             echo "Using uv (recommended)..."
-            if [ -n "$local_src" ]; then
-                uv tool install --force-reinstall $local_flag "$pkg"
-            else
-                uv tool install --upgrade --force-reinstall --refresh "$pkg"
-            fi
+            uv tool install --force-reinstall $local_flag "$pkg"
             # Also install claude-monitor for full functionality
             uv tool install --upgrade --force claude-monitor 2>/dev/null || true
             ;;
         pipx)
             echo "Using pipx..."
-            if [ -n "$local_src" ]; then
-                pipx install --force $local_flag "$pkg"
-            else
-                pipx install --force "$pkg"
-            fi
+            pipx install --force $local_flag "$pkg"
             pipx install --force claude-monitor 2>/dev/null || true
             pipx upgrade claude-monitor 2>/dev/null || true
             ;;
@@ -102,11 +95,8 @@ install_package() {
             echo "Using pip..."
             local pip_cmd="pip3"
             command -v pip3 &>/dev/null || pip_cmd="pip"
-            if [ -n "$local_src" ]; then
-                $pip_cmd install --user $local_flag "$pkg"
-            else
-                $pip_cmd install --user --upgrade --force-reinstall "$pkg" claude-monitor
-            fi
+            $pip_cmd install --user --force-reinstall $local_flag "$pkg"
+            $pip_cmd install --user --upgrade claude-monitor 2>/dev/null || true
 
             # Check PATH
             if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
@@ -131,11 +121,7 @@ install_package() {
             export PATH="$HOME/.cargo/bin:$PATH"
 
             # Install packages with uv
-            if [ -n "$local_src" ]; then
-                uv tool install --force-reinstall $local_flag "$pkg"
-            else
-                uv tool install --upgrade --force-reinstall --refresh "$pkg"
-            fi
+            uv tool install --force-reinstall $local_flag "$pkg"
             uv tool install --upgrade --force claude-monitor 2>/dev/null || true
             ;;
     esac

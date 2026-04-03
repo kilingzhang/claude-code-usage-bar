@@ -1283,7 +1283,6 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                 weekly_pct=None,
                 bypass=bypass, use_color=use_color,
                 current_time=_now,
-                forecast="",
                 project_name=project_name, git_branch=git_branch,
             ))
 
