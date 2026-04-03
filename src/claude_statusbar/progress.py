@@ -96,36 +96,43 @@ def format_status_line(
 
     sep = colorize(" | ", overall_color, use_color)
 
-    # Row 1: [██░░░░░░░░] 5h 20% ⏰4h12m | [█░░░░░░░░░] 7d 7% ⏰6d18h | 02:50
-    dim_5h = _build_dimension("5h", msgs_pct, overall_color, use_color)
-    dim_5h += " " + colorize(f"⏰{reset_time}", overall_color, use_color)
+    parts = [
+        _build_dimension("5h", msgs_pct, overall_color, use_color),
+    ]
 
     dim_7d = _build_dimension("7d", weekly_pct, overall_color, use_color)
     if reset_time_7d:
-        dim_7d += " " + colorize(f"⏰{reset_time_7d}", overall_color, use_color)
+        dim_7d += colorize(f" ⏰{reset_time_7d}", overall_color, use_color)
+    parts.append(dim_7d)
 
-    row1 = [dim_5h, dim_7d]
-    if current_time:
-        row1.append(colorize(current_time, overall_color, use_color))
+    parts.append(colorize(f"⏰{reset_time}", overall_color, use_color))
 
-    # Row 2: project ⎇ branch | model | $cost | +add/-del
-    row2 = []
+    # project ⎇ branch
     if project_name or git_branch:
         proj_parts = []
         if project_name:
             proj_parts.append(project_name)
         if git_branch:
             proj_parts.append(f"⎇ {git_branch}")
-        row2.append(colorize(" ".join(proj_parts), overall_color, use_color))
+        parts.append(colorize(" ".join(proj_parts), overall_color, use_color))
+
     model_str = model
     if plan:
         model_str += " " + plan
-    row2.append(colorize(model_str, overall_color, use_color))
-    if session_cost is not None and session_cost > 0:
-        row2.append(colorize(f"${session_cost:.2f}", overall_color, use_color))
-    if lines_added > 0 or lines_removed > 0:
-        row2.append(colorize(f"+{lines_added}/-{lines_removed}", overall_color, use_color))
-    if bypass:
-        row2.append(colorize("⚠️BYPASS", RED, use_color))
+    parts.append(colorize(model_str, overall_color, use_color))
 
-    return "\n".join([sep.join(row1), sep.join(row2)])
+    extras = []
+    if session_cost is not None and session_cost > 0:
+        extras.append(f"${session_cost:.2f}")
+    if lines_added > 0 or lines_removed > 0:
+        extras.append(f"+{lines_added}/-{lines_removed}")
+    if extras:
+        parts.append(colorize(" ".join(extras), overall_color, use_color))
+
+    if bypass:
+        parts.append(colorize("⚠️BYPASS", RED, use_color))
+
+    if current_time:
+        parts.append(colorize(current_time, overall_color, use_color))
+
+    return sep.join(parts)
