@@ -573,256 +573,41 @@ def format_compact_count(num: int) -> str:
     return str(num)
 
 
-def _sum_metric(entries: List[Dict[str, Any]], metric: str) -> float:
-    if metric == 'tokens':
-        return float(sum(entry['total_tokens'] for entry in entries))
-    return float(sum(entry['cost'] for entry in entries))
+def get_project_info() -> tuple[str, str]:
+    """Return (project_name, git_branch) for the current working directory.
 
-
-def _estimate_active_span_seconds(
-    entries: List[Dict[str, Any]],
-    gap_minutes: int = 45,
-    minimum_session_minutes: int = 5,
-) -> float:
-    """Approximate active wall time while capping long idle gaps."""
-    if not entries:
-        return 0.0
-
-    gap_seconds = gap_minutes * 60
-    minimum_session_seconds = minimum_session_minutes * 60
-
-    session_start = entries[0]['timestamp']
-    prev = entries[0]['timestamp']
-    total_seconds = 0.0
-
-    for entry in entries[1:]:
-        current = entry['timestamp']
-        if (current - prev).total_seconds() > gap_seconds:
-            total_seconds += max((prev - session_start).total_seconds(), minimum_session_seconds)
-            session_start = current
-        prev = current
-
-    total_seconds += max((prev - session_start).total_seconds(), minimum_session_seconds)
-    return total_seconds
-
-
-def _estimate_elapsed_span_seconds(entries: List[Dict[str, Any]], now: datetime) -> float:
-    """Real elapsed time from first observed usage until now."""
-    if not entries:
-        return 0.0
-    return max((now - entries[0]['timestamp']).total_seconds(), 60.0)
-
-
-def _estimate_weighted_span_seconds(
-    entries: List[Dict[str, Any]],
-    now: datetime,
-    decay_hours: float,
-    span_mode: str,
-) -> float:
-    """Weighted effective span where recent periods dominate older history."""
-    if not entries:
-        return 0.0
-
-    if span_mode == "elapsed":
-        total_span = _estimate_elapsed_span_seconds(entries, now)
-    else:
-        total_span = _estimate_active_span_seconds(entries)
-
-    newest_age_hours = max((now - entries[-1]['timestamp']).total_seconds() / 3600, 0.0)
-    age_factor = pow(0.5, newest_age_hours / max(decay_hours, 1.0))
-    return max(total_span * max(age_factor, 0.15), 60.0)
-
-
-def _weighted_metric_sum(
-    entries: List[Dict[str, Any]],
-    metric: str,
-    now: datetime,
-    decay_hours: float,
-) -> float:
-    """Exponentially decay old usage so recent history dominates."""
-    total = 0.0
-    for entry in entries:
-        age_hours = max((now - entry['timestamp']).total_seconds() / 3600, 0.0)
-        weight = pow(0.5, age_hours / max(decay_hours, 1.0))
-        value = float(entry['total_tokens']) if metric == 'tokens' else float(entry['cost'])
-        total += value * weight
-    return total
-
-
-def _compute_confidence(
-    rate_entries: List[Dict[str, Any]],
-    current_window_entries: List[Dict[str, Any]],
-    span_seconds: float,
-    history_mode: str,
-    span_mode: str,
-) -> Dict[str, Any]:
-    """Estimate how stable the forecast is."""
-    sample_count = len(rate_entries)
-    span_hours = span_seconds / 3600
-
-    sample_score = min(1.0, sample_count / 40.0)
-    coverage_target = 48.0 if history_mode == "weighted" else 24.0
-    if span_mode == "elapsed":
-        coverage_target = max(coverage_target, 72.0)
-    coverage_score = min(1.0, span_hours / coverage_target)
-
-    recent_cutoff = current_window_entries[0]['timestamp'] if current_window_entries else None
-    recent_matches = (
-        len([entry for entry in rate_entries if recent_cutoff and entry['timestamp'] >= recent_cutoff])
-        if recent_cutoff else 0
-    )
-    recency_score = min(1.0, recent_matches / 8.0) if recent_matches else 0.0
-
-    confidence = int(round((sample_score * 0.45 + coverage_score * 0.35 + recency_score * 0.20) * 100))
-    confidence = max(5, min(99, confidence))
-
-    if confidence >= 80:
-        label = "high"
-    elif confidence >= 55:
-        label = "med"
-    else:
-        label = "low"
-
-    return {
-        "score": confidence,
-        "label": label,
-        "samples": sample_count,
-        "span_hours": round(span_hours, 1),
-        "recent_samples": recent_matches,
-    }
-
-
-def build_usage_forecast(
-    current_pct: Optional[float],
-    reset_at: Optional[float],
-    current_window_entries: List[Dict[str, Any]],
-    history_entries: Optional[List[Dict[str, Any]]] = None,
-    lookback_minutes: Optional[int] = None,
-    now: Optional[datetime] = None,
-    history_mode: str = "weighted",
-    span_mode: str = "active",
-) -> Optional[Dict[str, Any]]:
-    """Estimate time-to-exhaust for a quota window.
-
-    `current_window_entries` calibrates local usage units to the official
-    Anthropic percentage. `history_entries` defines the burn-rate baseline.
+    project_name is the basename of the cwd; git_branch is the current
+    HEAD branch (or short SHA for detached HEAD). Returns empty strings
+    on failure.
     """
-    if current_pct is None or current_pct <= 0 or not reset_at:
-        return None
-    if lookback_minutes is not None and lookback_minutes <= 0:
-        return None
+    try:
+        cwd = os.getcwd()
+        project_name = os.path.basename(cwd) or cwd
+    except OSError:
+        project_name = ""
 
-    now = now or datetime.now(timezone.utc)
-    reset_dt = datetime.fromtimestamp(reset_at, tz=timezone.utc)
-    reset_minutes = max(0, int((reset_dt - now).total_seconds() / 60))
-
-    if not current_window_entries:
-        return None
-
-    current_window_entries = sorted(current_window_entries, key=lambda item: item['timestamp'])
-    all_history = sorted(history_entries if history_entries is not None else current_window_entries,
-                         key=lambda item: item['timestamp'])
-    if not all_history:
-        return None
-
-    if history_mode == "recent":
-        anchor = max(now - timedelta(minutes=lookback_minutes or 60), all_history[0]['timestamp'])
-        rate_entries = [entry for entry in all_history if entry['timestamp'] >= anchor]
-        span_seconds = max((now - anchor).total_seconds(), 60.0)
-        weighted = False
-    else:
-        rate_entries = all_history
-        weighted = history_mode == "weighted"
-        if weighted:
-            decay_hours = 72.0 if span_mode == "elapsed" else 24.0
-            span_seconds = _estimate_weighted_span_seconds(rate_entries, now, decay_hours, span_mode)
-        elif span_mode == "elapsed":
-            span_seconds = _estimate_elapsed_span_seconds(rate_entries, now)
-        else:
-            span_seconds = _estimate_active_span_seconds(rate_entries)
-
-    if not rate_entries or span_seconds <= 0:
-        return None
-
-    current_cost = _sum_metric(current_window_entries, 'cost')
-    current_tokens = _sum_metric(current_window_entries, 'tokens')
-    if weighted:
-        decay_hours = 72.0 if span_mode == "elapsed" else 24.0
-        rate_cost = _weighted_metric_sum(rate_entries, 'cost', now, decay_hours)
-        rate_tokens = _weighted_metric_sum(rate_entries, 'tokens', now, decay_hours)
-    else:
-        rate_cost = _sum_metric(rate_entries, 'cost')
-        rate_tokens = _sum_metric(rate_entries, 'tokens')
-
-    metric = 'cost'
-    current_total = current_cost
-    rate_total = rate_cost
-    if current_total <= 0 or rate_total <= 0:
-        metric = 'tokens'
-        current_total = current_tokens
-        rate_total = rate_tokens
-
-    if current_total <= 0 or rate_total <= 0:
-        return None
-
-    units_per_hour = rate_total / (span_seconds / 3600)
-    burn_pct_per_hour = units_per_hour * (float(current_pct) / current_total)
-    if burn_pct_per_hour <= 0:
-        return None
-
-    remaining_pct = max(0.0, 100.0 - float(current_pct))
-    eta_minutes = 0 if remaining_pct <= 0 else int((remaining_pct / burn_pct_per_hour) * 60)
-    will_exhaust_before_reset = eta_minutes <= reset_minutes if remaining_pct <= 0 else eta_minutes < reset_minutes
-
-    confidence = _compute_confidence(
-        rate_entries=rate_entries,
-        current_window_entries=current_window_entries,
-        span_seconds=span_seconds,
-        history_mode=history_mode,
-        span_mode=span_mode,
-    )
-
-    return {
-        'history_mode': history_mode,
-        'lookback_minutes': lookback_minutes,
-        'span_mode': span_mode,
-        'burn_pct_per_hour': burn_pct_per_hour,
-        'eta_minutes': eta_minutes,
-        'eta_text': format_compact_duration(eta_minutes),
-        'reset_minutes': reset_minutes,
-        'reset_text': format_compact_duration(reset_minutes),
-        'remaining_pct': remaining_pct,
-        'will_exhaust_before_reset': will_exhaust_before_reset,
-        'metric': metric,
-        'samples': len(rate_entries),
-        'confidence': confidence,
-    }
-
-
-def format_forecast_label(
-    five_hour_forecast: Optional[Dict[str, Any]],
-    seven_day_forecast: Optional[Dict[str, Any]],
-) -> str:
-    """Render compact forecast text for the status bar."""
-    parts: List[str] = []
-
-    if five_hour_forecast:
-        value = five_hour_forecast['eta_text'] if five_hour_forecast['will_exhaust_before_reset'] else ">reset"
-        conf = five_hour_forecast.get('confidence', {})
-        parts.append(
-            f"5h:{value}({conf.get('score', 0)}|n{format_compact_count(five_hour_forecast.get('samples', 0))})"
+    git_branch = ""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=2,
         )
+        if result.returncode == 0:
+            branch = result.stdout.strip()
+            if branch == "HEAD":
+                # Detached HEAD — show short SHA instead
+                result2 = subprocess.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    capture_output=True, text=True, timeout=2,
+                )
+                if result2.returncode == 0:
+                    git_branch = result2.stdout.strip()
+            else:
+                git_branch = branch
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
-    if seven_day_forecast:
-        value = seven_day_forecast['eta_text'] if seven_day_forecast['will_exhaust_before_reset'] else ">reset"
-        conf = seven_day_forecast.get('confidence', {})
-        parts.append(
-            f"7d:{value}({conf.get('score', 0)}|n{format_compact_count(seven_day_forecast.get('samples', 0))})"
-        )
-
-    if not parts:
-        return ""
-    return "⌛" + " ".join(parts)
+    return project_name, git_branch
 
 
 def is_bypass_permissions_active() -> bool:
@@ -1335,7 +1120,7 @@ def format_number(num: float) -> str:
 
 def main(json_output: bool = False, plan: Optional[str] = None,
          reset_hour: Optional[int] = None, use_color: bool = True,
-         detail: bool = False, forecast_window_minutes: int = 60):
+         detail: bool = False):
     """Main function"""
     stdin_data = parse_stdin_data()
 
@@ -1354,6 +1139,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
 
         model_id, display_name = get_current_model(stdin_data)
         bypass = is_bypass_permissions_active()
+        project_name, git_branch = get_project_info()
 
         if has_official:
             # ✅ Official data from Anthropic API headers (Claude Code ≥ v2.1.80)
@@ -1382,37 +1168,6 @@ def main(json_output: bool = False, plan: Optional[str] = None,
             else:
                 reset_time_7d = ""
 
-            history_entries = _load_usage_entries()
-            history_mode = "recent" if forecast_window_minutes is not None else "weighted"
-            current_5h_entries = [
-                entry for entry in history_entries
-                if entry['timestamp'] >= datetime.now(timezone.utc) - timedelta(hours=5)
-            ]
-            current_7d_entries = [
-                entry for entry in history_entries
-                if entry['timestamp'] >= datetime.now(timezone.utc) - timedelta(days=7)
-            ]
-
-            forecast_5h = build_usage_forecast(
-                current_pct=msgs_pct,
-                reset_at=resets_at,
-                current_window_entries=current_5h_entries,
-                history_entries=history_entries,
-                lookback_minutes=forecast_window_minutes,
-                history_mode=history_mode,
-                span_mode="active",
-            )
-            forecast_7d = build_usage_forecast(
-                current_pct=weekly_pct,
-                reset_at=resets_at_7d,
-                current_window_entries=current_7d_entries,
-                history_entries=history_entries,
-                lookback_minutes=forecast_window_minutes,
-                history_mode=history_mode,
-                span_mode="elapsed",
-            )
-            forecast_label = format_forecast_label(forecast_5h, forecast_7d)
-
             model = display_name if display_name != 'Unknown' else model_id
 
             # Plan label from saved config + promo window
@@ -1432,11 +1187,6 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                         "rate_limits": {
                             "five_hour": {"used_percentage": msgs_pct, "reset_time": reset_time},
                             "seven_day": {"used_percentage": weekly_pct, "reset_time": reset_time_7d},
-                        },
-                        "forecast": {
-                            "mode": history_mode,
-                            "five_hour": forecast_5h,
-                            "seven_day": forecast_7d,
                         },
                         "meta": {"model": model_id, "display_name": display_name,
                              "reset_time": reset_time, "reset_time_7d": reset_time_7d, "bypass": bypass,
@@ -1463,7 +1213,8 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                     session_cost=_cost,
                     lines_added=_lines_add, lines_removed=_lines_rm,
                     current_time=_now,
-                    forecast=forecast_label,
+
+                    project_name=project_name, git_branch=git_branch,
                 ))
         else:
             # No rate_limits yet — could be session start or old Claude Code
@@ -1504,7 +1255,8 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                         session_cost=_cost,
                         lines_added=_lines_add, lines_removed=_lines_rm,
                         current_time=_now,
-                        forecast="",
+
+                        project_name=project_name, git_branch=git_branch,
                     ))
             else:
                 # No stdin at all — not running inside Claude Code statusLine
@@ -1532,6 +1284,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                 bypass=bypass, use_color=use_color,
                 current_time=_now,
                 forecast="",
+                project_name=project_name, git_branch=git_branch,
             ))
 
 if __name__ == '__main__':
