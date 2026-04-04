@@ -455,6 +455,7 @@ def parse_stdin_data() -> Dict[str, Any]:
             cu = cw.get('current_usage', {})
             result['cache_creation_tokens'] = cu.get('cache_creation_input_tokens', 0)
             result['cache_read_tokens'] = cu.get('cache_read_input_tokens', 0)
+            result['cache_input_tokens'] = cu.get('input_tokens', 0)
 
         # Session cost
         cost = data.get('cost', {})
@@ -1133,6 +1134,8 @@ def main(json_output: bool = False, plan: Optional[str] = None,
     _lines_rm = stdin_data.get('lines_removed', 0)
     _cache_creation = stdin_data.get('cache_creation_tokens', 0)
     _cache_read = stdin_data.get('cache_read_tokens', 0)
+    _cache_total = stdin_data.get('cache_input_tokens', 0) + _cache_creation + _cache_read
+    _cache_hit_pct = round(_cache_read / _cache_total * 100) if _cache_total > 0 else 0
     _now = datetime.now().astimezone().strftime("%H:%M")
 
     try:
@@ -1217,7 +1220,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                     bypass=bypass, use_color=use_color,
                     session_cost=_cost,
                     lines_added=_lines_add, lines_removed=_lines_rm,
-                    cache_creation=_cache_creation, cache_read=_cache_read,
+                    cache_creation=_cache_creation, cache_read=_cache_read, cache_hit_pct=_cache_hit_pct,
                     current_time=_now,
 
                     project_name=project_name, git_branch=git_branch,
@@ -1260,7 +1263,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                         bypass=bypass, use_color=use_color,
                         session_cost=_cost,
                         lines_added=_lines_add, lines_removed=_lines_rm,
-                        cache_creation=_cache_creation, cache_read=_cache_read,
+                        cache_creation=_cache_creation, cache_read=_cache_read, cache_hit_pct=_cache_hit_pct,
                         current_time=_now,
 
                         project_name=project_name, git_branch=git_branch,
