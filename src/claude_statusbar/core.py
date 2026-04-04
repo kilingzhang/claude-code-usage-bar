@@ -455,7 +455,6 @@ def parse_stdin_data() -> Dict[str, Any]:
             cu = cw.get('current_usage', {})
             result['cache_creation_tokens'] = cu.get('cache_creation_input_tokens', 0)
             result['cache_read_tokens'] = cu.get('cache_read_input_tokens', 0)
-            result['cache_input_tokens'] = cu.get('input_tokens', 0)
 
         # Session cost
         cost = data.get('cost', {})
@@ -553,6 +552,34 @@ def _load_usage_entries(since: Optional[datetime] = None) -> List[Dict[str, Any]
 
     entries.sort(key=lambda item: item['timestamp'])
     return entries
+
+
+_global_cache_cache: Dict[str, Any] = {}  # simple in-process cache
+
+def get_global_cache_stats(window_hours: int = 5) -> Dict[str, int]:
+    """Aggregate cache_creation and cache_read across all JSONL entries in the window.
+
+    Returns dict with keys: creation, read, hit_pct.
+    Results are memoized for 60 seconds to avoid re-reading files on every tick.
+    """
+    now = datetime.now(timezone.utc)
+    cached_at = _global_cache_cache.get('ts')
+    if cached_at and (now - cached_at).total_seconds() < 60:
+        return _global_cache_cache['data']
+
+    since = now - timedelta(hours=window_hours)
+    entries = _load_usage_entries(since=since)
+
+    total_input = sum(e.get('input_tokens', 0) for e in entries)
+    total_creation = sum(e.get('cache_creation', 0) for e in entries)
+    total_read = sum(e.get('cache_read', 0) for e in entries)
+    total = total_input + total_creation + total_read
+    hit_pct = round(total_read / total * 100) if total > 0 else 0
+
+    result = {'creation': total_creation, 'read': total_read, 'hit_pct': hit_pct}
+    _global_cache_cache['ts'] = now
+    _global_cache_cache['data'] = result
+    return result
 
 
 def format_compact_duration(total_minutes: int) -> str:
@@ -1132,10 +1159,10 @@ def main(json_output: bool = False, plan: Optional[str] = None,
     _cost = stdin_data.get('session_cost_usd')
     _lines_add = stdin_data.get('lines_added', 0)
     _lines_rm = stdin_data.get('lines_removed', 0)
-    _cache_creation = stdin_data.get('cache_creation_tokens', 0)
-    _cache_read = stdin_data.get('cache_read_tokens', 0)
-    _cache_total = stdin_data.get('cache_input_tokens', 0) + _cache_creation + _cache_read
-    _cache_hit_pct = round(_cache_read / _cache_total * 100) if _cache_total > 0 else 0
+    _global_cache = get_global_cache_stats()
+    _cache_creation = _global_cache['creation']
+    _cache_read = _global_cache['read']
+    _cache_hit_pct = _global_cache['hit_pct']
     _now = datetime.now().astimezone().strftime("%H:%M")
 
     try:
