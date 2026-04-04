@@ -139,7 +139,7 @@ def format_status_line(
                 return f"{n/1000:.1f}k".replace(".0k", "k")
             return str(n)
         hit = f"({cache_hit_pct}%)" if cache_hit_pct > 0 else ""
-        extras.append(f"↓{_compact(cache_read)}{hit}")
+        extras.append(f"↑{_compact(cache_creation)} ↓{_compact(cache_read)}{hit}")
     if extras:
         parts.append(colorize(" ".join(extras), overall_color, use_color))
 
