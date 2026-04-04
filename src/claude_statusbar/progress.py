@@ -80,8 +80,8 @@ def format_status_line(
     session_cost: Optional[float] = None,
     lines_added: int = 0,
     lines_removed: int = 0,
-    cache_creation: int = 0,
-    cache_read: int = 0,
+    session_input: int = 0,
+    session_output: int = 0,
     cache_hit_pct: int = 0,
     current_time: str = "",
     project_name: str = "",
@@ -129,7 +129,7 @@ def format_status_line(
         extras.append(f"${session_cost:.2f}")
     if lines_added > 0 or lines_removed > 0:
         extras.append(f"+{lines_added}/-{lines_removed}")
-    if cache_creation > 0 or cache_read > 0:
+    if session_input > 0 or session_output > 0:
         def _compact(n: int) -> str:
             if n >= 1_000_000:
                 return f"{n/1_000_000:.1f}M".replace(".0M", "M")
@@ -139,7 +139,7 @@ def format_status_line(
                 return f"{n/1000:.1f}k".replace(".0k", "k")
             return str(n)
         hit = f"({cache_hit_pct}%)" if cache_hit_pct > 0 else ""
-        extras.append(f"↑{_compact(cache_creation)} ↓{_compact(cache_read)}{hit}")
+        extras.append(f"↑{_compact(session_input)}{hit} ↓{_compact(session_output)}")
     if extras:
         parts.append(colorize(" ".join(extras), overall_color, use_color))
 

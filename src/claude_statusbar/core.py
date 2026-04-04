@@ -453,8 +453,14 @@ def parse_stdin_data() -> Dict[str, Any]:
             result['total_input_tokens'] = cw.get('total_input_tokens', 0)
             result['total_output_tokens'] = cw.get('total_output_tokens', 0)
             cu = cw.get('current_usage', {})
-            result['cache_creation_tokens'] = cu.get('cache_creation_input_tokens', 0)
-            result['cache_read_tokens'] = cu.get('cache_read_input_tokens', 0)
+            cu_input = cu.get('input_tokens', 0)
+            cu_creation = cu.get('cache_creation_input_tokens', 0)
+            cu_read = cu.get('cache_read_input_tokens', 0)
+            cu_output = cu.get('output_tokens', 0)
+            result['session_input_tokens'] = cu_input + cu_creation + cu_read
+            result['session_output_tokens'] = cu_output
+            cu_total = cu_input + cu_creation + cu_read
+            result['session_cache_hit_pct'] = round(cu_read / cu_total * 100) if cu_total > 0 else 0
 
         # Session cost
         cost = data.get('cost', {})
@@ -1159,10 +1165,9 @@ def main(json_output: bool = False, plan: Optional[str] = None,
     _cost = stdin_data.get('session_cost_usd')
     _lines_add = stdin_data.get('lines_added', 0)
     _lines_rm = stdin_data.get('lines_removed', 0)
-    _global_cache = get_global_cache_stats()
-    _cache_creation = _global_cache['creation']
-    _cache_read = _global_cache['read']
-    _cache_hit_pct = _global_cache['hit_pct']
+    _session_input = stdin_data.get('session_input_tokens', 0)
+    _session_output = stdin_data.get('session_output_tokens', 0)
+    _cache_hit_pct = stdin_data.get('session_cache_hit_pct', 0)
     _now = datetime.now().astimezone().strftime("%H:%M")
 
     try:
@@ -1247,7 +1252,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                     bypass=bypass, use_color=use_color,
                     session_cost=_cost,
                     lines_added=_lines_add, lines_removed=_lines_rm,
-                    cache_creation=_cache_creation, cache_read=_cache_read, cache_hit_pct=_cache_hit_pct,
+                    session_input=_session_input, session_output=_session_output, cache_hit_pct=_cache_hit_pct,
                     current_time=_now,
 
                     project_name=project_name, git_branch=git_branch,
@@ -1290,7 +1295,7 @@ def main(json_output: bool = False, plan: Optional[str] = None,
                         bypass=bypass, use_color=use_color,
                         session_cost=_cost,
                         lines_added=_lines_add, lines_removed=_lines_rm,
-                        cache_creation=_cache_creation, cache_read=_cache_read, cache_hit_pct=_cache_hit_pct,
+                        session_input=_session_input, session_output=_session_output, cache_hit_pct=_cache_hit_pct,
                         current_time=_now,
 
                         project_name=project_name, git_branch=git_branch,
